@@ -4,6 +4,7 @@ from typing import List
 from datetime import datetime
 from optimizer import PSC_Optimizer
 import numpy as np
+from datetime import timedelta
 
 app = FastAPI()
 
@@ -22,6 +23,7 @@ def optimize_schedule(tasks: List[Task], calendar_events: List[Task]):
     task_times = [task.duration for task in tasks]
     task_deadlines = [task.deadline for task in tasks]
     task_priorities = [task.priority for task in tasks]
+    task_names = [task.name for task in tasks]
 
     # Convert calendar events to block ranges (assuming 5-minute blocks from 8am-12am = 192 blocks)
     def dt_to_block(dt: datetime):
@@ -31,12 +33,13 @@ def optimize_schedule(tasks: List[Task], calendar_events: List[Task]):
 
     fixed_events = []
     for event in calendar_events:
-        start_block = dt_to_block(event.deadline)  # Using deadline as end for simplicity
+        start_block = dt_to_block(event.deadline)
         duration_blocks = event.duration // 5
-        fixed_events.append((start_block - duration_blocks, start_block))  # start to end block
+        fixed_events.append((start_block - duration_blocks, start_block))
 
-    # Run optimization
-    optimizer = PSC_Optimizer(task_times, task_deadlines, task_priorities, fixed_events)
+    # Run 
+    calendar = Calendar(fixed_events)
+    optimizer = PSC_Optimizer(task_times, task_deadlines, task_names, calendar)
     schedule = optimizer.optimize()
 
     # Build schedule response

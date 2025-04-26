@@ -1,10 +1,16 @@
-from datetime import datetime
 from gurobipy import Model, GRB, quicksum
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
+from datetime import timedelta
+
+# Get current time
+current_time = datetime.now()
+
+# Print or use the stored value
+print("Current Time:", current_time)
 
 class FixedEvent:
-    def __init__(self, title, start_time, end_time=None, description=""):
+    def __init__(self, title, start_time, end_time, description=""):
         self.title = title # string
         self.start_time = start_time # datetime object
         self.end_time = end_time # datetime object
@@ -17,6 +23,11 @@ class FixedEvent:
         my_horizon = self.end_time - datetime.now() # Initializes change in datetime as a timedelta object
         return my_horizon.total_seconds()
     
+# Get current time
+current_time = datetime.now()
+
+# Print or use the stored value
+print("Current Time:", current_time)
     
 class Calendar: 
     def __init__(self, fixed_tasks, priorities=None):
@@ -40,7 +51,7 @@ class Calendar:
         if priorities is not None:
             self.priorities = priorities
         else:
-            self.priorities = [1 for _ in range(len(task_times))]
+            self.priorities = [1 for _ in range(len(fixed_tasks))]
 
     """
     Returns an array of times that contain tasks already
@@ -56,7 +67,6 @@ class Calendar:
         for task_name, task_start_end in tasks_dict.items():
             self.task_domains.append([i for i in range(task_start_end[0], task_start_end[1] + 1)])
             
-            
 class PSC_Optimizer:
     """
     task_times: List of integers in minutes
@@ -65,38 +75,44 @@ class PSC_Optimizer:
     current_calendar: Calendar Object
     time_horizon: datetime object
     priorities: List of Integers
-    priority_constant: Float in (0, 1)
+    priority_weight: Float in (0, 1)
     """
-    def __init__(self, task_times, deadlines, task_names, current_calendar, time_horizon=None, priorities=None, priority_constant=0.15):
-        self.task_times = task_times / 5  # 
-        self.deadlines = deadlines  # Array (length num tasks)
+    def __init__(self, task_times, deadlines, task_names, current_calendar, time_horizon=None, priorities=None, priority_weight=0.15, time_weight=0.2):
+        self.zero_block = self.get_zero_block()
+        self.task_times = [int((task_times[j].total_seconds() // 300)) for j in range(len(task_times))] # 
+        self.deadlines = [int((deadlines[i] - self.zero_block).total_seconds() // 300) for i in range(len(deadlines))]  # Array (length num tasks)
+        print(f"deadlines: {self.deadlines}")
         self.task_names = task_names
-        self.num_tasks = len(task_times / 5)
+        self.num_tasks = len(task_times)
         self.current_calendar = current_calendar # NOTE: TIME BLOCKS MUST MATCH UP TO THIS OPTIMIZER'S TIME BLOCKS
+        print(self.num_tasks)
+        print(f"time_horizon: {time_horizon}")
+        self.time_weight = time_weight
 
+        print(f"len(self.task_times): {len(self.task_times)} \n len(self.deadlines): {len(self.deadlines)} \n num_tasks: {self.num_tasks}")
         if time_horizon is not None:
             self.max_time = self.dt_to_block(time_horizon)
         else:
-            self.max_time = max(dt_to_block(deadline) for deadline in deadlines)
+            print(max(self.dt_to_block(deadline) for deadline in deadlines))
+            self.max_time = max(deadline for deadline in self.deadlines)
 
         if priorities is not None:
             self.priorities = priorities
         else:
             self.priorities = [1 for _ in range(len(task_times))]
 
-        self.priority_constant = priority_constant 
+        self.priority_weight = priority_weight 
         
-        self.fixed_domain = [0 for _ in range(max(self.max_time))]
+        self.fixed_domain = [0 for _ in range(self.max_time)]
         for task in current_calendar.get_tasks():
             # Compare their datetime with the zero_block datetime
             task_start = self.dt_to_block(task.start_time)
             task_end = self.dt_to_block(task.end_time)
             for i in range(task_start, task_end):
                 self.fixed_domain[i] = 1
-        
-        self.zero_block = self.get_zero_block()
 
-    
+        
+        
 
     def OptimizeCalendar(self):
         if len(self.task_times) != len(self.deadlines):
@@ -119,11 +135,15 @@ class PSC_Optimizer:
         task_starting_time = model.addVars(self.max_time, self.num_tasks, vtype=GRB.BINARY, name="t")  # t[i, j] binary
         anti_anxiety = model.addVars(self.num_tasks, vtype=GRB.INTEGER, name="a")
 
+        print(f"task_time 0: {task_times[0]}")
 
         #Constraint 0: Cannot schedule tasks in blocks that already have something scheduled
-        unavailable_blocks = self.fixed_domain()
-        if unavailable_blocks[i] > 0:
-            model.addConstr(task_to_block[i, j] == 0)
+        unavailable_blocks = self.fixed_domain
+        print(self.fixed_domain)
+        for i in range(len(unavailable_blocks)):
+            if unavailable_blocks[i] > 0:
+                for j in range(self.num_tasks):
+                        model.addConstr(task_to_block[i, j] == 0)
 
         # Constraint 1: Ensure each task is assigned exactly `task_times[j]` blocks in the time horizon
         for j in range(self.num_tasks):
@@ -169,10 +189,10 @@ class PSC_Optimizer:
             for t_prime in range(t, t + self.task_times[j])
         )
     
-        
-        # Temporary Objective: Minimize task starting times
+
+        # Set Objective function    
         model.setObjective(
-            sum(sum((1+i)*task_starting_time[i, j] * (1 - self.priority_constant * self.priorities[j]) 
+            sum(sum((1+self.time_weight*i)*task_starting_time[i, j] * (1 - self.priority_weight * self.priorities[j]) 
             for j in range(self.num_tasks)) 
             for i in range(self.max_time)),
             GRB.MINIMIZE
@@ -220,9 +240,11 @@ class PSC_Optimizer:
 
     # Take in a datetime and spit out its block in this optimizer
     def dt_to_block(self, dt):
-        # Compare their datetime with the zero_block datetime
-        block_num = ((dt - self.zero_block).total_seconds() / 300) - 1        
-        return block_num
+        print("self.zero_block: {self.zero_block} \n dt: {dt}")
+    # Ensure both are datetime.datetime objects
+        delta = dt - self.zero_block
+        block_num = delta.total_seconds() // 300 
+        return int(block_num)  # optional: round or floor depending on your use
 
     def get_zero_block(self):
         dt = datetime.now() 
